@@ -6,6 +6,11 @@
 #include <readline/history.h>
 
 #include "history.h"
+#include "expansion.h"
+#include "lexer.h"
+#include "parser.h"
+#include "executor.h"
+
 
 int main(void)
 {
@@ -26,28 +31,95 @@ int main(void)
             break;
         }
 
+        /*
+         * Ignore empty input.
+         */
         if (strlen(line) == 0)
         {
             free(line);
             continue;
         }
 
-        if (strcmp(line, "history") == 0)
+        /*
+         * Add command to history.
+         */
+        add_history(line);
+
+        /*
+         * ------------------------------------------------
+         * ENVIRONMENT VARIABLE EXPANSION
+         * ------------------------------------------------
+         */
+        char expanded[MAX_EXPANDED_LENGTH];
+
+        if (!expand_variables(line,
+                              expanded,
+                              MAX_EXPANDED_LENGTH))
         {
-            print_history();
+            fprintf(stderr, "Expansion failed.\n");
             free(line);
             continue;
         }
 
-        add_history(line);
+        /*
+         * ------------------------------------------------
+         * LEXER
+         * ------------------------------------------------
+         */
+        token_list_t tokens;
 
-        printf("YOU ENTERED : %s\n", line);
+        lexer(expanded, &tokens);
 
-        if (strcmp(line, "exit") == 0)
+        /*
+         * ------------------------------------------------
+         * PARSER
+         * ------------------------------------------------
+         */
+        pipeline_t pipeline;
+
+        if (!parser(&tokens, &pipeline))
         {
+            fprintf(stderr, "Parser failed.\n");
             free(line);
-            printf("Exiting...\n");
-            break;
+            continue;
+        }
+
+        /*
+         * ------------------------------------------------
+         * EXECUTOR
+         * ------------------------------------------------
+         *
+         * For now, execute_command() handles:
+         *
+         *      - built-in commands
+         *      - external commands
+         *
+         * Pipeline execution will be added later.
+         */
+        if (pipeline.command_count == 1)
+        {
+            int result = execute_command(&pipeline.commands[0]);
+
+            /*
+             * result == 1 means the exit built-in
+             * requested that the shell terminate.
+             */
+            if (result == 1 &&
+                pipeline.commands[0].argc > 0 &&
+                strcmp(pipeline.commands[0].argv[0], "exit") == 0)
+            {
+                free(line);
+                printf("Exiting...\n");
+                break;
+            }
+        }
+        else
+        {
+            /*
+             * Pipeline execution will be implemented
+             * in the next part of Milestone 4.1.
+             */
+            printf("Pipeline execution not implemented yet.\n");
         }
 
         free(line);
