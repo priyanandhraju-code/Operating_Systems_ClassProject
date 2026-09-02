@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-Wall -Wextra -std=c11 -Iinclude
 
-SRC=src/lexer.c src/parser.c src/parser_test.c
+SRC=src/expansion.c src/lexer.c src/parser.c src/integration_test.c
 
 TARGET=shellforge
 
