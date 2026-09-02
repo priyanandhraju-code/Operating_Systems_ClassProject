@@ -1,0 +1,13 @@
+# Compiled executable
+shellforge
+
+# Object files
+*.o
+
+# Core dumps
+core
+core.*
+
+# IDE files
+.vscode/
+.idea/
