@@ -2,25 +2,125 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #include "executor.h"
 #include "builtin.h"
 
 
 /*
- * Execute one command.
- *
- * Built-in commands are executed directly by the shell.
- *
- * External commands are executed using:
- *
- *      fork()
- *      execvp()
- *      waitpid()
+ * Apply input/output redirection.
  *
  * Returns:
- *      0 or child's exit status -> success
- *     -1                     -> error
+ *      0  -> success
+ *     -1  -> error
+ */
+static int setup_redirection(const command_t *cmd)
+{
+    int fd;
+
+    /*
+     * -----------------------------------------------
+     * INPUT REDIRECTION
+     * -----------------------------------------------
+     *
+     * command < input.txt
+     */
+    if (cmd->input[0] != '\0')
+    {
+        fd = open(cmd->input, O_RDONLY);
+
+        if (fd < 0)
+        {
+            perror("open input");
+            return -1;
+        }
+
+        if (dup2(fd, STDIN_FILENO) < 0)
+        {
+            perror("dup2 input");
+            close(fd);
+            return -1;
+        }
+
+        close(fd);
+    }
+
+
+    /*
+     * -----------------------------------------------
+     * OUTPUT REDIRECTION
+     * -----------------------------------------------
+     *
+     * command > output.txt
+     * command >> output.txt
+     */
+    if (cmd->output[0] != '\0')
+    {
+        int flags = O_WRONLY | O_CREAT;
+
+        if (cmd->append)
+        {
+            /*
+             * Append to existing file.
+             */
+            flags |= O_APPEND;
+        }
+        else
+        {
+            /*
+             * Create/truncate file.
+             */
+            flags |= O_TRUNC;
+        }
+
+        fd = open(cmd->output, flags, 0644);
+
+        if (fd < 0)
+        {
+            perror("open output");
+            return -1;
+        }
+
+        if (dup2(fd, STDOUT_FILENO) < 0)
+        {
+            perror("dup2 output");
+            close(fd);
+            return -1;
+        }
+
+        close(fd);
+    }
+
+    return 0;
+}
+
+
+/*
+ * Execute one command.
+ *
+ * Handles:
+ *
+ *      - built-in commands
+ *      - external commands
+ *      - input redirection
+ *      - output redirection
+ *      - append redirection
+ *
+ * External commands:
+ *
+ *      fork()
+ *        |
+ *        +--> child -> redirection -> execvp()
+ *        |
+ *        +--> parent -> waitpid()
+ *
+ * Built-ins:
+ *
+ *      save shell FDs
+ *      redirect
+ *      execute built-in
+ *      restore shell FDs
  */
 int execute_command(command_t *cmd)
 {
@@ -29,7 +129,9 @@ int execute_command(command_t *cmd)
 
 
     /*
-     * Check whether the command is valid.
+     * -----------------------------------------------
+     * VALIDATE COMMAND
+     * -----------------------------------------------
      */
     if (cmd == NULL || cmd->argc == 0)
     {
@@ -38,29 +140,124 @@ int execute_command(command_t *cmd)
 
 
     /*
-     * ------------------------------------------------
+     * -----------------------------------------------
      * BUILT-IN COMMAND
-     * ------------------------------------------------
+     * -----------------------------------------------
      *
-     * Built-ins such as:
+     * Built-ins must execute in the shell process.
+     *
+     * This is especially important for:
      *
      *      cd
-     *      pwd
-     *      echo
-     *      exit
      *
-     * are handled by the shell itself.
+     * because cd must change the shell's directory.
      */
     if (is_builtin(cmd))
     {
-        return execute_builtin(cmd);
+        int saved_stdin = -1;
+        int saved_stdout = -1;
+        int result;
+
+
+        /*
+         * Save standard input/output before
+         * applying redirection.
+         */
+        if (cmd->input[0] != '\0')
+        {
+            saved_stdin = dup(STDIN_FILENO);
+
+            if (saved_stdin < 0)
+            {
+                perror("dup stdin");
+                return -1;
+            }
+        }
+
+        if (cmd->output[0] != '\0')
+        {
+            saved_stdout = dup(STDOUT_FILENO);
+
+            if (saved_stdout < 0)
+            {
+                perror("dup stdout");
+
+                if (saved_stdin >= 0)
+                {
+                    close(saved_stdin);
+                }
+
+                return -1;
+            }
+        }
+
+
+        /*
+         * Apply redirection to the shell process.
+         */
+        if (setup_redirection(cmd) < 0)
+        {
+            /*
+             * Restore anything already saved.
+             */
+            if (saved_stdin >= 0)
+            {
+                dup2(saved_stdin, STDIN_FILENO);
+                close(saved_stdin);
+            }
+
+            if (saved_stdout >= 0)
+            {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
+
+            return -1;
+        }
+
+
+        /*
+         * Execute the built-in.
+         */
+        result = execute_builtin(cmd);
+
+
+        /*
+         * Restore standard input.
+         */
+        if (saved_stdin >= 0)
+        {
+            if (dup2(saved_stdin, STDIN_FILENO) < 0)
+            {
+                perror("restore stdin");
+            }
+
+            close(saved_stdin);
+        }
+
+
+        /*
+         * Restore standard output.
+         */
+        if (saved_stdout >= 0)
+        {
+            if (dup2(saved_stdout, STDOUT_FILENO) < 0)
+            {
+                perror("restore stdout");
+            }
+
+            close(saved_stdout);
+        }
+
+
+        return result;
     }
 
 
     /*
-     * ------------------------------------------------
-     * CREATE CHILD PROCESS
-     * ------------------------------------------------
+     * -----------------------------------------------
+     * EXTERNAL COMMAND
+     * -----------------------------------------------
      */
     pid = fork();
 
@@ -76,49 +273,40 @@ int execute_command(command_t *cmd)
 
 
     /*
-     * ------------------------------------------------
+     * -----------------------------------------------
      * CHILD PROCESS
-     * ------------------------------------------------
+     * -----------------------------------------------
      */
     if (pid == 0)
     {
         /*
-         * Execute the external command.
-         *
-         * command_t already stores argv as:
-         *
-         *      argv[0] = command
-         *      argv[1] = first argument
-         *      ...
-         *      argv[argc] = NULL
-         *
-         * execvp() replaces the child process with
-         * the requested external program.
+         * Apply redirection inside the child.
+         */
+        if (setup_redirection(cmd) < 0)
+        {
+            _exit(1);
+        }
+
+
+        /*
+         * Execute external command.
          */
         execvp(cmd->argv[0], cmd->argv);
 
 
         /*
-         * If execvp() returns, execution failed.
+         * execvp() only returns if execution failed.
          */
         perror("Shellforge");
 
-        /*
-         * Exit only the child process.
-         *
-         * 127 indicates that the command could
-         * not be executed.
-         */
         _exit(127);
     }
 
 
     /*
-     * ------------------------------------------------
+     * -----------------------------------------------
      * PARENT PROCESS
-     * ------------------------------------------------
-     *
-     * Wait for the child process to finish.
+     * -----------------------------------------------
      */
     if (waitpid(pid, &status, 0) == -1)
     {
@@ -128,24 +316,16 @@ int execute_command(command_t *cmd)
 
 
     /*
-     * ------------------------------------------------
-     * CHILD EXIT STATUS
-     * ------------------------------------------------
+     * Return child's exit status.
      */
     if (WIFEXITED(status))
     {
-        /*
-         * Return the actual exit status of
-         * the external command.
-         */
         return WEXITSTATUS(status);
     }
 
 
     /*
-     * ------------------------------------------------
-     * CHILD TERMINATED BY SIGNAL
-     * ------------------------------------------------
+     * Child was terminated by a signal.
      */
     if (WIFSIGNALED(status))
     {
