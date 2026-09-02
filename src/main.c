@@ -21,15 +21,23 @@ int main(void)
 
     using_history();
 
+
     while (1)
     {
+        /*
+         * -------------------------------------------
+         * READ COMMAND
+         * -------------------------------------------
+         */
         char *line = readline("shellforge$ ");
+
 
         if (line == NULL)
         {
             printf("\nGoodbye!\n");
             break;
         }
+
 
         /*
          * Ignore empty input.
@@ -40,17 +48,20 @@ int main(void)
             continue;
         }
 
+
         /*
          * Add command to history.
          */
         add_history(line);
 
+
         /*
-         * ------------------------------------------------
+         * -------------------------------------------
          * ENVIRONMENT VARIABLE EXPANSION
-         * ------------------------------------------------
+         * -------------------------------------------
          */
         char expanded[MAX_EXPANDED_LENGTH];
+
 
         if (!expand_variables(line,
                               expanded,
@@ -61,21 +72,25 @@ int main(void)
             continue;
         }
 
+
         /*
-         * ------------------------------------------------
+         * -------------------------------------------
          * LEXER
-         * ------------------------------------------------
+         * -------------------------------------------
          */
         token_list_t tokens;
 
+
         lexer(expanded, &tokens);
 
+
         /*
-         * ------------------------------------------------
+         * -------------------------------------------
          * PARSER
-         * ------------------------------------------------
+         * -------------------------------------------
          */
         pipeline_t pipeline;
+
 
         if (!parser(&tokens, &pipeline))
         {
@@ -84,46 +99,59 @@ int main(void)
             continue;
         }
 
-        /*
-         * ------------------------------------------------
-         * EXECUTOR
-         * ------------------------------------------------
-         *
-         * For now, execute_command() handles:
-         *
-         *      - built-in commands
-         *      - external commands
-         *
-         * Pipeline execution will be added later.
-         */
-        if (pipeline.command_count == 1)
-        {
-            int result = execute_command(&pipeline.commands[0]);
 
-            /*
-             * result == 1 means the exit built-in
-             * requested that the shell terminate.
-             */
-            if (result == 1 &&
-                pipeline.commands[0].argc > 0 &&
-                strcmp(pipeline.commands[0].argv[0], "exit") == 0)
-            {
-                free(line);
-                printf("Exiting...\n");
-                break;
-            }
-        }
-        else
+        /*
+         * -------------------------------------------
+         * HISTORY COMMAND
+         * -------------------------------------------
+         */
+        if (pipeline.command_count == 1 &&
+            pipeline.commands[0].argc > 0 &&
+            strcmp(pipeline.commands[0].argv[0], "history") == 0)
         {
-            /*
-             * Pipeline execution will be implemented
-             * in the next part of Milestone 4.1.
-             */
-            printf("Pipeline execution not implemented yet.\n");
+            print_history();
+
+            free(line);
+            continue;
         }
+
+
+        /*
+         * -------------------------------------------
+         * EXIT COMMAND
+         * -------------------------------------------
+         *
+         * execute_pipeline() handles a single
+         * built-in command.
+         */
+        if (pipeline.command_count == 1 &&
+            pipeline.commands[0].argc > 0 &&
+            strcmp(pipeline.commands[0].argv[0], "exit") == 0)
+        {
+            free(line);
+            printf("Exiting...\n");
+            break;
+        }
+
+
+        /*
+         * -------------------------------------------
+         * EXECUTOR
+         * -------------------------------------------
+         *
+         * This now handles:
+         *
+         *      single command
+         *      external command
+         *      redirection
+         *      pipeline
+         */
+        execute_pipeline(&pipeline);
+
 
         free(line);
     }
+
 
     return 0;
 }

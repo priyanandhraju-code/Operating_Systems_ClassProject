@@ -9,22 +9,30 @@
 
 
 /*
- * Apply input/output redirection.
+ * ------------------------------------------------
+ * SETUP REDIRECTION
+ * ------------------------------------------------
+ *
+ * Handles:
+ *
+ *      < input.txt
+ *      > output.txt
+ *      >> output.txt
  *
  * Returns:
- *      0  -> success
- *     -1  -> error
+ *
+ *       0 -> success
+ *      -1 -> error
  */
 static int setup_redirection(const command_t *cmd)
 {
     int fd;
 
+
     /*
      * -----------------------------------------------
      * INPUT REDIRECTION
      * -----------------------------------------------
-     *
-     * command < input.txt
      */
     if (cmd->input[0] != '\0')
     {
@@ -36,12 +44,14 @@ static int setup_redirection(const command_t *cmd)
             return -1;
         }
 
+
         if (dup2(fd, STDIN_FILENO) < 0)
         {
             perror("dup2 input");
             close(fd);
             return -1;
         }
+
 
         close(fd);
     }
@@ -51,28 +61,27 @@ static int setup_redirection(const command_t *cmd)
      * -----------------------------------------------
      * OUTPUT REDIRECTION
      * -----------------------------------------------
-     *
-     * command > output.txt
-     * command >> output.txt
      */
     if (cmd->output[0] != '\0')
     {
         int flags = O_WRONLY | O_CREAT;
 
+
+        /*
+         * >> means append.
+         */
         if (cmd->append)
         {
-            /*
-             * Append to existing file.
-             */
             flags |= O_APPEND;
         }
         else
         {
             /*
-             * Create/truncate file.
+             * > means overwrite.
              */
             flags |= O_TRUNC;
         }
+
 
         fd = open(cmd->output, flags, 0644);
 
@@ -82,6 +91,7 @@ static int setup_redirection(const command_t *cmd)
             return -1;
         }
 
+
         if (dup2(fd, STDOUT_FILENO) < 0)
         {
             perror("dup2 output");
@@ -89,38 +99,19 @@ static int setup_redirection(const command_t *cmd)
             return -1;
         }
 
+
         close(fd);
     }
+
 
     return 0;
 }
 
 
 /*
- * Execute one command.
- *
- * Handles:
- *
- *      - built-in commands
- *      - external commands
- *      - input redirection
- *      - output redirection
- *      - append redirection
- *
- * External commands:
- *
- *      fork()
- *        |
- *        +--> child -> redirection -> execvp()
- *        |
- *        +--> parent -> waitpid()
- *
- * Built-ins:
- *
- *      save shell FDs
- *      redirect
- *      execute built-in
- *      restore shell FDs
+ * ------------------------------------------------
+ * EXECUTE SINGLE COMMAND
+ * ------------------------------------------------
  */
 int execute_command(command_t *cmd)
 {
@@ -129,9 +120,7 @@ int execute_command(command_t *cmd)
 
 
     /*
-     * -----------------------------------------------
-     * VALIDATE COMMAND
-     * -----------------------------------------------
+     * Validate command.
      */
     if (cmd == NULL || cmd->argc == 0)
     {
@@ -141,16 +130,14 @@ int execute_command(command_t *cmd)
 
     /*
      * -----------------------------------------------
-     * BUILT-IN COMMAND
+     * BUILT-IN
      * -----------------------------------------------
      *
      * Built-ins must execute in the shell process.
      *
-     * This is especially important for:
+     * This is important for commands such as:
      *
      *      cd
-     *
-     * because cd must change the shell's directory.
      */
     if (is_builtin(cmd))
     {
@@ -160,8 +147,7 @@ int execute_command(command_t *cmd)
 
 
         /*
-         * Save standard input/output before
-         * applying redirection.
+         * Save stdin if input redirection exists.
          */
         if (cmd->input[0] != '\0')
         {
@@ -174,6 +160,10 @@ int execute_command(command_t *cmd)
             }
         }
 
+
+        /*
+         * Save stdout if output redirection exists.
+         */
         if (cmd->output[0] != '\0')
         {
             saved_stdout = dup(STDOUT_FILENO);
@@ -193,13 +183,10 @@ int execute_command(command_t *cmd)
 
 
         /*
-         * Apply redirection to the shell process.
+         * Apply redirection.
          */
         if (setup_redirection(cmd) < 0)
         {
-            /*
-             * Restore anything already saved.
-             */
             if (saved_stdin >= 0)
             {
                 dup2(saved_stdin, STDIN_FILENO);
@@ -217,35 +204,27 @@ int execute_command(command_t *cmd)
 
 
         /*
-         * Execute the built-in.
+         * Execute built-in.
          */
         result = execute_builtin(cmd);
 
 
         /*
-         * Restore standard input.
+         * Restore stdin.
          */
         if (saved_stdin >= 0)
         {
-            if (dup2(saved_stdin, STDIN_FILENO) < 0)
-            {
-                perror("restore stdin");
-            }
-
+            dup2(saved_stdin, STDIN_FILENO);
             close(saved_stdin);
         }
 
 
         /*
-         * Restore standard output.
+         * Restore stdout.
          */
         if (saved_stdout >= 0)
         {
-            if (dup2(saved_stdout, STDOUT_FILENO) < 0)
-            {
-                perror("restore stdout");
-            }
-
+            dup2(saved_stdout, STDOUT_FILENO);
             close(saved_stdout);
         }
 
@@ -262,9 +241,6 @@ int execute_command(command_t *cmd)
     pid = fork();
 
 
-    /*
-     * fork() failed.
-     */
     if (pid < 0)
     {
         perror("fork");
@@ -274,13 +250,13 @@ int execute_command(command_t *cmd)
 
     /*
      * -----------------------------------------------
-     * CHILD PROCESS
+     * CHILD
      * -----------------------------------------------
      */
     if (pid == 0)
     {
         /*
-         * Apply redirection inside the child.
+         * Apply redirection.
          */
         if (setup_redirection(cmd) < 0)
         {
@@ -289,23 +265,22 @@ int execute_command(command_t *cmd)
 
 
         /*
-         * Execute external command.
+         * Replace child with external command.
          */
         execvp(cmd->argv[0], cmd->argv);
 
 
         /*
-         * execvp() only returns if execution failed.
+         * execvp() failed.
          */
         perror("Shellforge");
-
         _exit(127);
     }
 
 
     /*
      * -----------------------------------------------
-     * PARENT PROCESS
+     * PARENT
      * -----------------------------------------------
      */
     if (waitpid(pid, &status, 0) == -1)
@@ -316,7 +291,7 @@ int execute_command(command_t *cmd)
 
 
     /*
-     * Return child's exit status.
+     * Return child exit status.
      */
     if (WIFEXITED(status))
     {
@@ -325,7 +300,7 @@ int execute_command(command_t *cmd)
 
 
     /*
-     * Child was terminated by a signal.
+     * Child terminated by signal.
      */
     if (WIFSIGNALED(status))
     {
@@ -338,4 +313,310 @@ int execute_command(command_t *cmd)
 
 
     return -1;
+}
+
+
+/*
+ * ------------------------------------------------
+ * EXECUTE PIPELINE
+ * ------------------------------------------------
+ *
+ * Example:
+ *
+ *      ls | grep .c
+ *
+ * For each command:
+ *
+ *      create pipe
+ *      fork child
+ *      connect stdin/stdout using dup2()
+ *      close unused descriptors
+ *
+ * Finally:
+ *
+ *      wait for all children
+ *
+ * Return:
+ *
+ *      exit status of the last command
+ */
+int execute_pipeline(pipeline_t *pipeline)
+{
+    int previous_read = -1;
+    pid_t pids[MAX_COMMANDS];
+    int pid_count = 0;
+
+
+    /*
+     * Validate pipeline.
+     */
+    if (pipeline == NULL ||
+        pipeline->command_count <= 0)
+    {
+        return -1;
+    }
+
+
+    /*
+     * A single command does not need a pipeline.
+     */
+    if (pipeline->command_count == 1)
+    {
+        return execute_command(&pipeline->commands[0]);
+    }
+
+
+    /*
+     * -----------------------------------------------
+     * CREATE EACH PIPELINE COMMAND
+     * -----------------------------------------------
+     */
+    for (int i = 0; i < pipeline->command_count; i++)
+    {
+        int pipefd[2] = {-1, -1};
+
+
+        /*
+         * Every command except the last one needs
+         * a pipe for its output.
+         */
+        if (i < pipeline->command_count - 1)
+        {
+            if (pipe(pipefd) == -1)
+            {
+                perror("pipe");
+
+                if (previous_read != -1)
+                {
+                    close(previous_read);
+                }
+
+                return -1;
+            }
+        }
+
+
+        /*
+         * -------------------------------------------
+         * FORK
+         * -------------------------------------------
+         */
+        pid_t pid = fork();
+
+
+        if (pid < 0)
+        {
+            perror("fork");
+
+            if (previous_read != -1)
+            {
+                close(previous_read);
+            }
+
+            if (pipefd[0] != -1)
+            {
+                close(pipefd[0]);
+            }
+
+            if (pipefd[1] != -1)
+            {
+                close(pipefd[1]);
+            }
+
+            return -1;
+        }
+
+
+        /*
+         * -------------------------------------------
+         * CHILD PROCESS
+         * -------------------------------------------
+         */
+        if (pid == 0)
+        {
+            /*
+             * If this is not the first command,
+             * connect previous pipe to stdin.
+             *
+             * previous pipe:
+             *
+             *      previous command
+             *              |
+             *              ▼
+             *         previous_read
+             */
+            if (previous_read != -1)
+            {
+                if (dup2(previous_read, STDIN_FILENO) == -1)
+                {
+                    perror("dup2 stdin");
+                    _exit(1);
+                }
+            }
+
+
+            /*
+             * If this is not the last command,
+             * connect stdout to the new pipe.
+             */
+            if (i < pipeline->command_count - 1)
+            {
+                if (dup2(pipefd[1], STDOUT_FILENO) == -1)
+                {
+                    perror("dup2 stdout");
+                    _exit(1);
+                }
+            }
+
+
+            /*
+             * Close previous pipe descriptor.
+             */
+            if (previous_read != -1)
+            {
+                close(previous_read);
+            }
+
+
+            /*
+             * Close both ends of the new pipe.
+             *
+             * dup2() has already copied the required
+             * descriptor to stdin/stdout.
+             */
+            if (pipefd[0] != -1)
+            {
+                close(pipefd[0]);
+            }
+
+            if (pipefd[1] != -1)
+            {
+                close(pipefd[1]);
+            }
+
+
+            /*
+             * Apply explicit redirection.
+             *
+             * This allows commands such as:
+             *
+             *      cat < input.txt | grep hello
+             *
+             * or:
+             *
+             *      ls | grep .c > output.txt
+             */
+            if (setup_redirection(&pipeline->commands[i]) < 0)
+            {
+                _exit(1);
+            }
+
+
+            /*
+             * Execute the command.
+             */
+            if (is_builtin(&pipeline->commands[i]))
+            {
+                int result =
+                    execute_builtin(&pipeline->commands[i]);
+
+                _exit(result == 0 ? 0 : result);
+            }
+
+
+            execvp(pipeline->commands[i].argv[0],
+                   pipeline->commands[i].argv);
+
+
+            /*
+             * execvp() failed.
+             */
+            perror("Shellforge");
+            _exit(127);
+        }
+
+
+        /*
+         * -------------------------------------------
+         * PARENT PROCESS
+         * -------------------------------------------
+         */
+
+        pids[pid_count++] = pid;
+
+
+        /*
+         * Parent no longer needs the previous pipe.
+         */
+        if (previous_read != -1)
+        {
+            close(previous_read);
+            previous_read = -1;
+        }
+
+
+        /*
+         * Parent closes the write end of the
+         * newly-created pipe.
+         *
+         * The read end becomes the input for
+         * the next command.
+         */
+        if (i < pipeline->command_count - 1)
+        {
+            close(pipefd[1]);
+            previous_read = pipefd[0];
+        }
+    }
+
+
+    /*
+     * -----------------------------------------------
+     * PARENT: CLOSE REMAINING PIPE
+     * -----------------------------------------------
+     */
+    if (previous_read != -1)
+    {
+        close(previous_read);
+    }
+
+
+    /*
+     * -----------------------------------------------
+     * WAIT FOR ALL CHILDREN
+     * -----------------------------------------------
+     */
+    int last_status = 0;
+
+
+    for (int i = 0; i < pid_count; i++)
+    {
+        int status;
+
+
+        if (waitpid(pids[i], &status, 0) == -1)
+        {
+            perror("waitpid");
+            continue;
+        }
+
+
+        /*
+         * Save the status of the LAST command.
+         */
+        if (i == pid_count - 1)
+        {
+            if (WIFEXITED(status))
+            {
+                last_status = WEXITSTATUS(status);
+            }
+            else if (WIFSIGNALED(status))
+            {
+                last_status = -1;
+            }
+        }
+    }
+
+
+    return last_status;
 }
